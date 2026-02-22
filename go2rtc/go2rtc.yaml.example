@@ -1,0 +1,6 @@
+api:
+  listen: ":1984"
+
+streams:
+  bedroom_cam: xiaomi://<user_id>:cn@<camera_ip>?did=<did>&model=xiaomi.camera.c302
+  living_cam: xiaomi://<user_id>:cn@<camera_ip>?did=<did>&model=xiaomi.camera.c302

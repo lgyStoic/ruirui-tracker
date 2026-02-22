@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+uv.lock
+*.bak
+go2rtc/go2rtc
+go2rtc/*.log
+go2rtc/go2rtc.yaml
