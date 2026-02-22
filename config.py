@@ -31,9 +31,13 @@ YS7_CAMERAS = {
 # ── Home Assistant ──
 HA_URL = os.environ.get("HA_URL", "http://192.168.2.24:8123")
 
-# ── OpenClaw webhook（告警通知） ──
+# ── OpenClaw webhook（告警通知，备用） ──
 OPENCLAW_HOOK_URL = os.environ.get("OPENCLAW_HOOK_URL", "http://127.0.0.1:18789/hooks")
 OPENCLAW_HOOK_TOKEN = os.environ.get("OPENCLAW_HOOK_TOKEN", "")
+
+# ── 飞书群机器人 webhook（主通知渠道） ──
+FEISHU_BOT_WEBHOOK = os.environ.get("FEISHU_BOT_WEBHOOK",
+    "https://open.feishu.cn/open-apis/bot/v2/hook/d5bd8fc9-f951-4872-b94b-159b97a4a55a")
 
 # ── 分析参数 ──
 GEMINI_MODEL = "gemini-2.5-pro"

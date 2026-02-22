@@ -77,8 +77,21 @@ def send_alert(alert):
 
 
 def notify_feishu(message):
-    """通过 HA rest_command 或直接 webhook 通知"""
-    # 使用 OpenClaw hooks
+    """通过飞书群机器人 webhook 通知，失败降级到 OpenClaw hook"""
+    # 主渠道：飞书群机器人
+    try:
+        r = requests.post(
+            FEISHU_BOT_WEBHOOK,
+            json={"msg_type": "text", "content": {"text": message}},
+            headers={"Content-Type": "application/json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return
+    except Exception as e:
+        print(f"  ⚠️ 飞书群机器人通知失败: {e}")
+
+    # 降级：OpenClaw hook
     try:
         headers = {"Content-Type": "application/json"}
         if OPENCLAW_HOOK_TOKEN:
@@ -91,7 +104,6 @@ def notify_feishu(message):
         )
         r.raise_for_status()
     except:
-        # 降级：写到文件让 cron agent 读取
         alert_file = CAPTURE_DIR / "pending_alerts.txt"
         with open(alert_file, "a") as f:
             f.write(f"{message}\n")
