@@ -142,28 +142,7 @@ def run_capture():
             results[name] = {"ok": False, "error": str(e)}
             print(f"❌ {name}: {e}")
 
-    # 萤石云猫眼
-    for name, serial in YS7_CAMERAS.items():
-        try:
-            token = get_ys7_token(state)
-            img_bytes = capture_ys7(serial, token)
-            output_path = CAPTURE_DIR / f"{name}_{now_str}.jpg"
-
-            last_key = f"last_{name}"
-            diff = 999.0
-            if last_key in state and Path(state[last_key]).exists():
-                diff = frame_diff(img_bytes, state[last_key])
-
-            output_path.write_bytes(img_bytes)
-            state[last_key] = str(output_path)
-
-            changed = diff > DIFF_THRESHOLD
-            results[name] = {"ok": True, "size": len(img_bytes), "diff": diff, "changed": changed}
-            print(f"{'🔴' if changed else '⚪'} {name}: {len(img_bytes)//1024}KB diff={diff:.1f}")
-
-        except Exception as e:
-            results[name] = {"ok": False, "error": str(e)}
-            print(f"❌ {name}: {e}")
+    # 猫眼不再轮询截图 — 改为事件驱动（见 door_check.py）
 
     # 汇总
     any_change = any(r.get("changed", False) for r in results.values())

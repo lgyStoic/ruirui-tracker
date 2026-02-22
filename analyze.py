@@ -8,6 +8,7 @@ from PIL import Image, ImageChops
 from config import *
 from state import load_baby_state, save_baby_state, parse_gemini_result, update_state
 from alert import evaluate_alerts, send_alert
+from door_check import check_door_event
 
 
 # ── Gemini 成本估算 ──
@@ -25,7 +26,6 @@ PROMPT = """你看到的是家庭摄像头过去10分钟的截图（每2分钟�
 摄像头说明：
 - bedroom = 卧室（婴儿房，粉色墙，蚊帐婴儿床）
 - living = 客厅（活动区，彩色玩具）
-- door = 门口猫眼（海康DP2C，看门外走廊）
 
 关键识别：
 - 锐锐8个月大，不会走路站立！只会躺、坐、爬、趴
@@ -38,16 +38,8 @@ PROMPT = """你看到的是家庭摄像头过去10分钟的截图（每2分钟�
 - 结合多帧变化推断：位置没变=持续同一活动，位置变了=有转场
 - 彩色画面 = 开灯；黑白画面 = 关灯/夜视模式
 
-猫眼（door）重点分析：
-- 看门外走廊，判断是否有婴儿车/推车/伞车经过或停在门口
-- 婴儿车+大人往外走 → 锐锐出门了
-- 婴儿车+大人往家方向来 → 锐锐回来了
-- 结合室内画面：室内突然看不到锐锐+猫眼有婴儿车 → 确认出门
-- 室内突然出现锐锐+猫眼有婴儿车 → 确认回来
-
-输出格式：
-第一行：房间 | 活动描述 | 陪伴情况 | 环境光线
-第二行（可选，仅在检测到出门/回家时）：EVENT: 出门 或 EVENT: 回来
+输出格式（严格一行）：
+房间 | 活动描述 | 陪伴情况 | 环境光线
 
 陪伴情况：无人、大人、妈妈、爸爸、家属、不确定
 环境光线：明亮、暗、夜视 等
@@ -56,7 +48,7 @@ PROMPT = """你看到的是家庭摄像头过去10分钟的截图（每2分钟�
 卧室 | 一直在婴儿床里睡觉 | 无人 | 关灯、夜视
 客厅→卧室 | 前5分钟客厅玩耍，后被抱回卧室睡觉 | 妈妈 | 明亮
 
-没有出门/回家事件就只输出第一行。"""
+只输出一行，不要多余文字。"""
 
 
 # ── 工具函数 ──
@@ -220,21 +212,6 @@ def call_gemini(selected, gemini_key):
     raise last_err
 
 
-# ── 解析 EVENT ──
-
-def parse_event(result_text):
-    """从 Gemini 输出中提取 EVENT 行"""
-    lines = result_text.strip().split("\n")
-    summary = lines[0].strip()
-    event = None
-    for line in lines[1:]:
-        line = line.strip()
-        if line.startswith("EVENT:"):
-            event = line.split(":", 1)[1].strip()
-            break
-    return summary, event
-
-
 def handle_event(event, state, now):
     """处理出门/回来事件，返回是否需要通知"""
     if not event:
@@ -304,21 +281,20 @@ def run_analyze():
 
     bedroom_sampled = sample_evenly(captures["bedroom"], MAX_PER_CAM)
     living_sampled = sample_evenly(captures["living"], MAX_PER_CAM)
-    door_sampled = sample_evenly(captures["door"], MAX_DOOR_FRAMES)
-    selected = bedroom_sampled + living_sampled + door_sampled
-    print(f"📷 采样{len(selected)}张（卧室{len(bedroom_sampled)} + 客厅{len(living_sampled)} + 猫眼{len(door_sampled)}）")
+    selected = bedroom_sampled + living_sampled
+    print(f"📷 采样{len(selected)}张（卧室{len(bedroom_sampled)} + 客厅{len(living_sampled)}）")
 
     try:
         result_text, total_size = call_gemini(selected, gemini_key)
         print(f"📦 {total_size // 1024}KB → 🤖 {result_text}")
 
-        # 解析总结 + EVENT
-        summary, event = parse_event(result_text)
-
         # 更新状态机
+        summary = result_text.strip().split("\n")[0].strip()
         parsed = parse_gemini_result(summary)
         baby_state = load_baby_state()
+        old_status = baby_state["status"]
         baby_state, transitions = update_state(baby_state, parsed)
+        new_status = baby_state["status"]
         save_baby_state(baby_state)
 
         # 评估告警（状态转换类）
@@ -326,20 +302,39 @@ def run_analyze():
         for a in alerts:
             send_alert(a)
 
-        # 处理出门/回来事件
-        should_notify, notify_msg = handle_event(event, tracker_state, now)
-        if should_notify:
-            print(f"🚼 NOTIFY: {notify_msg}")
-            from alert import notify_feishu
-            try:
-                notify_feishu(notify_msg)
-            except Exception as e:
-                print(f"❌ 飞书通知失败: {e}")
+        # 猫眼事件检查：室内状态变化时触发
+        event = None
+        ruirui_visible = new_status in ("sleeping", "playing", "held", "eating", "alone_awake")
+        was_visible = old_status in ("sleeping", "playing", "held", "eating", "alone_awake")
+
+        if was_visible and not ruirui_visible:
+            # 锐锐消失了 → 可能出门
+            print("👀 锐锐从室内消失，检查猫眼...")
+            has_stroller, _ = check_door_event("out", gemini_key)
+            if has_stroller:
+                event = "出门"
+        elif not was_visible and ruirui_visible:
+            # 锐锐出现了 → 可能回来
+            print("👀 锐锐重新出现，检查猫眼...")
+            has_stroller, _ = check_door_event("in", gemini_key)
+            if has_stroller:
+                event = "回来"
+
+        # 处理出门/回来事件通知
+        if event:
+            should_notify, notify_msg = handle_event(event, tracker_state, now)
+            if should_notify:
+                print(f"🚼 NOTIFY: {notify_msg}")
+                from alert import notify_feishu
+                try:
+                    notify_feishu(notify_msg)
+                except Exception as e:
+                    print(f"❌ 飞书通知失败: {e}")
 
         # 写日志
         log_file = get_log_file()
         log_file.parent.mkdir(exist_ok=True)
-        status_tag = f"[{baby_state['status']}]"
+        status_tag = f"[{new_status}]"
         entry = f"- {now.strftime('%H:%M')} {status_tag} | {summary}\n"
         if event:
             entry += f"  - ⚡ EVENT: {event}\n"
